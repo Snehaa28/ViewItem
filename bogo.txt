@@ -1,0 +1,134 @@
+bogoCal.js
+------
+
+'use strict';
+/*
+    BOGO offers are mix match for the Net Each and Percent Each. This function calculates the price based on the quantity.
+    For BOGO free the least priced product should be free.
+*/
+
+module.exports = (context, bogoObj) => {
+
+    var quantity, offerQty;
+    var cartItems = [];
+    var total_price = bogoObj.total_price;
+    delete bogoObj.total_price;
+
+    Object.keys(bogoObj).forEach(ele => {
+        quantity = bogoObj[ele].quantity; //quantity is count of all the particular offerId items
+
+        var { promoMinQty, promoMaxQty, promoMethod, promoPrice, rawOfferPrice } = bogoObj[ele].items[0].item.clubPrice[0]//bogoObj[ele].items[0][0].clubPrice;
+        var itemsArray = bogoObj[ele].items;
+        const modVal = quantity % promoMinQty;
+
+        if (promoMethod == "NE") { //offerQty is the quantity only to which we have to calculate the price
+            //#region BOGO logic
+            promoMaxQty == 0 ? promoMaxQty = 1 : promoMaxQty;
+
+            if (modVal === 0) {
+                offerQty = quantity - ((quantity / promoMinQty) * promoMaxQty);
+            } else {
+                offerQty = quantity - (Math.floor(quantity / promoMinQty) * promoMaxQty);
+            }
+            // else {
+            //     offerQty = quantity; //not qualified for the offer
+            // }
+
+            itemsArray.sort(sortByPrice);
+
+            for (let itm of itemsArray) { //itm[0] is cart item with clubOject and itm[1] is the item from collection object
+                let promoPrice = itm.item.clubPrice[0].promoPrice;
+
+                itm.item.regular_price = (itm.quantity * promoPrice);
+
+                if (offerQty >= itm.quantity) {
+                    itm.item.item_price = itm.quantity * promoPrice;
+                    offerQty = offerQty - itm.quantity;
+                } else if (offerQty > 0) {
+                    //itm[1].item_price = ((cartItem.quantity - offerQty) * cartItem.clubPrice.promoPrice)
+                    itm.item.item_price = (offerQty * promoPrice)
+                } else {
+                    itm.item.item_price = (offerQty * promoPrice)
+                }
+
+                cartItems.push(itm);
+                total_price += itm.item.item_price;
+            }
+            //#endregion
+        }
+        else if (promoMethod == "PE") {
+            //#region Buy some and get some % Off
+            if (modVal == 0) {
+                offerQty = ((quantity / promoMinQty) * promoMaxQty);
+                quantity -= offerQty;
+            } else {
+                offerQty = (Math.floor(quantity / promoMinQty) * promoMaxQty);
+                quantity -= offerQty;
+            }
+            //sort to apply offers for the lower price items
+            itemsArray.sort(sortByPrice);
+
+            for (let itm of itemsArray) {
+                let promoPrice = itm.item.clubPrice[0].promoPrice; //as price for each item is different
+
+                itm.item.regular_price = (itm.quantity * promoPrice);
+
+                let indvidualItemPrice = itm.item.item_price;
+
+                if (itm.quantity > quantity) {
+
+                    indvidualItemPrice = (indvidualItemPrice || 0) + (quantity * promoPrice);
+                    indvidualItemPrice = (indvidualItemPrice || 0) + (itm.quantity - quantity) * (promoPrice * (rawOfferPrice / 100)).toFixed(2);
+                    offerQty -= (itm.quantity - quantity);
+                    quantity = 0;
+                }
+                else if (itm.quantity < quantity) {
+
+                    if (itm.quantity <= offerQty) {
+                        indvidualItemPrice = (indvidualItemPrice || 0) + (itm.quantity * promoPrice * (rawOfferPrice / 100)).toFixed(2);
+                        offerQty -= itm.quantity;
+                    }
+                    // else if(itm.quantity > offerQty){ // pls keep this commented section for later correction if needed
+                    //     indvidualItemPrice = (indvidualItemPrice || 0) + ((itm.quantity - offerQty) * promoPrice * (rawOfferPrice / 100));
+                    //     offerQty -= itm.quantity;
+                    // }
+                    else {
+                        indvidualItemPrice = (indvidualItemPrice || 0) + (itm.quantity * promoPrice);
+                        quantity -= itm.quantity;
+                    }
+                }
+                else { //if (itm.quantity == quantity) //when they buy even numbers. 
+
+                    //first apply the offerQty
+                    if (offerQty > 0) {
+                        indvidualItemPrice = (indvidualItemPrice || 0) + (offerQty * (promoPrice * (rawOfferPrice / 100))).toFixed(2);
+                        offerQty = 0;
+                    } else {
+                        indvidualItemPrice = (indvidualItemPrice || 0) + (quantity * promoPrice);
+                        quantity = 0;
+                    }
+                }
+
+                itm.item.item_price = Number(indvidualItemPrice);
+
+                cartItems.push(itm);
+                total_price += itm.item.item_price;
+            }
+            //#endregion
+        }
+
+    })
+
+    bogoObj.total_price = parseFloat(total_price.toFixed(2));
+
+    var returnVal = {};
+    returnVal.items = cartItems;
+    returnVal.total_price = total_price;
+    return returnVal;
+}
+
+//sort by price as to apply for the least priced product
+function sortByPrice(a, b) {
+    let aD = (a.item.clubPrice.promoPrice), bD = b.item.clubPrice.promoPrice;
+    return ((aD > bD) ? -1 : ((aD < bD) ? 1 : 0));
+};
