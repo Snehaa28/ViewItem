@@ -1,0 +1,109 @@
+
+1. Header
+
+1.Headers
+
+x-functions-key	- String
+
+storeid	- 9879
+guid -	12345
+
+2. No Resquest body
+
+3. Response
+Response (200-Success)
+
+{
+"ack": "0",
+"data": {
+"items": [
+{
+"scan_code": "0046500217641",
+"upc_type": "upca",
+"quantity": 2,
+"bag_item": false,
+"added_time_stamp": 1610601740937,
+"last_updated_timestamp": 1610601769652,
+"item": {
+"_id": "5ff3887c17fc111e4877178e",
+"item_id": "0004650021764",
+"sku": "0000073010356",
+"pos_description": "GLADE PLUG INS",
+"ext_description": "GLADE PLUG INS VANILLA BREEZE SCENTED OIL REFILL",
+"sell_multiple": 1,
+"sell_price": 12.58,
+"crv_item": 0,
+"link_code": " ",
+"food_stamp": false,
+"restricted_item": false,
+"ewic": false,
+"weight_item": false,
+"dept": 322,
+"tax_item": true,
+"club_item": false,
+"smic": 0,
+"store_id": "9879",
+"points_apply": true,
+"non_discountable": false,
+"item_price": 9.44,
+"clubPrice": [
+{
+"promoFactor": "1",
+"promoMethod": "PE",
+"promoPrice": 6.29,
+"promoMaxQty": 1,
+"promoMinQty": 2,
+"offerId": "12390577",
+"cms_flag": false,
+"rawOfferPrice": 50,
+"offerMessage": "Buy 1 and Get 1 for 50% Off",
+"offerMsg1": "of Equal or lesser value. Mix and Match"
+}
+],
+"regular_price": 12.58,
+"image_url": "https://images.albertsons-media.com/is/image/ABS/00046500217641?$ecom-product-card-desktop$&defaultImage=Not_Available",
+"jfuOfferCount": 0,
+"jfuOffers": [
+{
+"offerId": "false"
+}
+]
+}
+}
+],
+"total_quantity": 2,
+"total_price": 9.44,
+"time_stamp": 1610601769652
+},
+"message": "Cart found successfully"
+}
+-----
+
+Response(400-Bad Request)
+
+{
+"ack": "0",
+"category": "Backend_error",
+"message": "Cart not found",
+"data": {
+"_id": "",
+"guid": "1234569",
+"store_id": "9879",
+"items": []
+}
+}
+
+OR
+
+{
+"ack": "0",
+"message": "Cart is empty",
+"data": {
+"time_stamp": 1610601305808,
+"_id": "5fffd359a987f23ad0bb6eed",
+"guid": "12345",
+"store_id": "9879",
+"items": [],
+"__v": 0
+}
+}
