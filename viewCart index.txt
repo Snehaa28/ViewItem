@@ -1,0 +1,362 @@
+index.js file of View cart
+---------------------
+
+
+require('../config/db');
+
+const jwt = require('jsonwebtoken');
+const Cart = require('../models/Cart');
+const Items = require('../models/Items');
+const clubPriceCal = require('./clubPriceCal');
+const bogoCal = require('./bogoCal');
+const EPELookUp = require('./EPELookup');
+const isUpcType2 = require('./isUpcTypeTwo');
+
+const viewCartError = process.env.MESSAGE_GENERIC1;
+const EPE = process.env.EPE || 'false';
+
+module.exports = (context, req) => {
+
+  context.log('view cart req:-', JSON.parse(JSON.stringify(req.headers)));
+  const { guid, storeid, oktatoken } = req.headers;
+
+  Cart.findOne({ guid, store_id: storeid }, { _id: 0, __v: 0 })
+    .then(async res => {
+      // #region NO CART FOUND
+      if (res === null) {
+        context.res = {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: {
+            ack: '0',
+            category: 'cart_not_found',
+            message: 'Cart not found',
+            data: {
+              guid,
+              store_id: storeid,
+              items: []
+            }
+          }
+        };
+        context.done();
+        return;
+      }
+      // #endregion
+
+      // #region CART EXISTS
+      const itemList = res.items;
+      const {
+        transaction_status,
+        order_id,
+        time_stamp
+      } = res;
+
+      // #region NO ITEMS IN CART
+      if (itemList.length === 0) {
+        context.res = {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: {
+            ack: '0',
+            message: 'Cart is empty',
+            category: 'empty_cart',
+            data: res
+          }
+        };
+        context.done();
+        return;
+      }
+      // #endregion
+
+      // #region ITEMS EXISTS
+      // get itemIds
+      const itemIds = getItemIds(itemList);
+
+      let sell_price = null,
+          total_quantity = 0,
+          total_price = 0;
+      let dbItems;
+      try {
+        dbItems = await Items.find({ item_id: { $in: itemIds }, store_id: storeid });
+      } catch (err) {
+        context.log('view cart error:-', err);
+        throw err;
+      }
+
+      var itemsResp = {};
+      let cartResp = [];
+      let i = 0;
+      // divide sell_price with sell_multiple
+      dbItems.forEach(itm => {
+        itm.sell_price = (itm.sell_price / itm.sell_multiple).toFixed(2);
+        itemsResp[itm.item_id] = itm;
+      });
+      var bogoObj = {};
+
+      itemList.map(itm => {
+        const itemId = itm.item_id;
+        // if item exists in the DB
+        if (itemsResp[itemId]) {
+          let item = Object.assign({}, itemsResp[itemId]._doc);
+
+          const quantity = itm.quantity;
+          const scan_code = itm.scan_code;
+          const sellPrice = item.sell_price;
+
+          const isType2 = isUpcType2(scan_code, itm.upc_type);
+          let offer;
+
+          if (isType2) {
+
+            let scanCode = itm.scan_code;
+            if (((itm.scan_code).startsWith('02') || scan_code.startsWith('22'))
+                && (itm.scan_code).length === 13) {
+              scanCode = (itm.scan_code).substring(1);
+            }
+
+            sell_price = parseFloat((scanCode).substring(7, 11)) / 100;
+            // for upc type 2 items; we needd to calculate from the price on the barcode.
+            item.sell_price = sell_price;
+            itm.weight = parseFloat(sell_price / item.sell_price);
+
+          } else {
+            sell_price = parseFloat(item.sell_price);
+          }
+
+          if (itm.clubPrice) {
+
+            // itm -> item from cart; item-> item from items collection
+            const offerPrice = clubPriceCal(itm, item, context);
+            if (offerPrice > 0) {
+              item.item_price = offerPrice;
+            }
+            offer = itm.clubPrice;
+          } else {
+            item.clubPrice = [];
+          }
+
+          // #region  BOGO Calculations
+          if (offer && offer[0] && offer[0].promoPrice) {
+            var {
+              rawOfferPrice,
+              promoMethod,
+              promoMaxQty,
+              offerId
+            } = offer[0];
+
+            if ((rawOfferPrice === 0) || (promoMethod === 'PE' && promoMaxQty > 0)) {
+              item.clubPrice = offer;
+              item.item_price = 0;
+            } else {
+              const offerPrice = clubPriceCal(itm, item, context);
+              if (offerPrice > 0) {
+                item.item_price = offerPrice;
+              }
+              item.clubPrice = offer;
+            }
+          } else {
+            item.clubPrice = [];
+          }
+          // #endregion
+
+          if (itm.weight_item !== undefined && itm.weight_item) {
+            const weight = itm.weight;
+            let weightInDouble = 0;
+            total_quantity += 1;
+
+            if ((sellPrice % 1) === 0) { // to check if it is integer
+              weightInDouble = parseInt(weight, 10) * 1.0;
+            } else {
+              weightInDouble = parseFloat(weight);
+            }
+            item.sell_price = (sell_price * weightInDouble);
+          } else {
+            total_quantity += quantity;
+            item.sell_price = (sell_price * quantity);
+          }
+
+          // price for the quantity added. price *quan
+          item.regular_price = parseFloat((item.sell_price).toFixed(2));
+          // price per 1 item.
+          item.sell_price = sell_price;
+
+          if (item.item_price && item.item_price !== 0) {
+            total_price += item.item_price;
+          } else if (item.item_price === undefined) {
+            // dont add regular price when item_price is 0.
+            // for bogo's we define item_price as 0.
+            total_price += item.regular_price;
+          }
+
+          // dont show offers that are more than regular price
+          if ((item.regular_price < item.item_price) || (item.item_price === 0)) {
+            delete item.item_price;
+          }
+
+          total_price = parseFloat(parseFloat(total_price).toFixed(2));
+
+          const actualCode = itm.scan_code;
+          let image_item_id = actualCode.padStart(14, '0');
+
+          if (isType2) {
+            item.item_id = itm.scan_code;
+          }
+
+          if (item.bpn_no) {
+            image_item_id = item.bpn_no;
+          }
+
+          item.image_url = process.env.image_url.replace('item_id', image_item_id);
+          item.ext_description = item.ext_description.toUpperCase();
+          item.pos_description = item.pos_description.toUpperCase();
+
+          if (itm.promoOfferPrice) {
+            item.promoOfferPrice = itm.promoOfferPrice;
+          }
+          item.jfuOfferCount = itm.jfuOfferCount || 0;
+          item.jfuOffers = itm.jfuOffers || [{ offerId: 'false' }];
+
+          let eachItem = {};
+
+          eachItem.scan_code = actualCode;
+          eachItem.upc_type = itm.upc_type;
+          eachItem.weight = itm.weight;
+          eachItem.quantity = itm.quantity;
+          eachItem.bag_item = itm.bag_item;
+          eachItem.added_time_stamp = itm.added_time_stamp;
+          eachItem.last_updated_timestamp = itm.last_updated_timestamp;
+          eachItem.item = item;
+
+          // #region  Bogo cal
+          if ((rawOfferPrice === 0) || (promoMethod === 'PE' && promoMaxQty > 0)) {
+
+            if (bogoObj[offerId]) {
+              bogoObj[offerId]['items'].push(eachItem);
+              bogoObj[offerId]['quantity'] += eachItem.quantity;
+            } else {
+              bogoObj[offerId] = {};
+              bogoObj[offerId]['items'] = [eachItem];
+              bogoObj[offerId]['quantity'] = eachItem.quantity;
+            }
+          } else {
+            // #endregion
+            cartResp[i] = eachItem;
+            i += 1;
+          }
+        }
+      });
+
+      if (Object.keys(bogoObj).length > 0) {
+        bogoObj.total_price = total_price;
+        const bogoResp = bogoCal(context, bogoObj);
+
+        Array.prototype.push.apply(cartResp, bogoResp.items);
+        total_price = bogoResp.total_price;
+      }
+
+      const resultDoc = {};
+      resultDoc.items = cartResp.sort(sortItemsByDateTime);
+      resultDoc.total_quantity = total_quantity;
+      resultDoc.total_price = parseFloat(total_price.toFixed(2));
+      resultDoc.transaction_status = transaction_status;
+      resultDoc.order_id = order_id;
+      resultDoc.time_stamp = time_stamp;
+
+      // need hid to call EPE
+      let EPEOffers = null;
+      context.log('viewCart EPE check:', EPE, oktatoken);
+
+      if (EPE === 'true' && oktatoken) {
+        const parsedInfo = jwt.decode(oktatoken);
+        context.log('viewCart EPE check:', parsedInfo);
+        if (parsedInfo) {
+          EPEOffers = await EPELookUp(context, parsedInfo.hid, resultDoc);
+        }
+      }
+      if (typeof EPEOffers === 'object') {
+        resultDoc.offers = EPEOffers;
+      } else if (process.env.EPE_STUB) { // for fronend to continue testing
+        resultDoc.offers = [
+          {
+            category: 'Club Card Savings',
+            savings: 1
+          },
+          {
+            category: 'Employee Savings',
+            savings: 0.52
+          }
+        ];
+      }
+      context.log('viewCart:- res:', resultDoc);
+      context.res = {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          ack: '0',
+          data: resultDoc,
+          message: 'Cart found successfully'
+        }
+      };
+      context.done();
+      // #endregion
+    })
+    .catch(err => {
+      context.log('viewCart:- error:', err);
+      context.res = viewCartErrorResponse(viewCartError, guid, storeid);
+      context.done();
+    });
+};
+
+// #region Sort Items
+const sortItemsByDateTime = (a, b) => {
+  const aD = (a.last_updated_timestamp),
+    bD = b.last_updated_timestamp;
+  return ((aD > bD) ? -1 : ((aD < bD) ? 1 : 0));
+};
+// #endregion
+
+// #region Get Item ids for each item
+const getItemIds = (itemList) => {
+  const itemIds = [];
+  // get itemIds
+  itemList.forEach(items => {
+
+    let scanCode = items.scan_code;
+
+    if (isUpcType2(scanCode, items.upc_type)) {
+
+      let itemCode = '';
+      let manufactureCode = '';
+      if (scanCode.length === 13) {
+        scanCode = scanCode.substring(1);
+      }
+      manufactureCode = scanCode.substring(1, 6);
+      itemCode = '2' + manufactureCode + '00000';
+      const itmId = itemCode.padStart(13, '0');
+
+      if (!itemIds.includes(itemCode)) {
+        items.item_id = itmId;
+      }
+    }
+    itemIds.push(items.item_id);
+  });
+  return itemIds;
+};
+// #endregion
+
+const viewCartErrorResponse = (errorMsg, guid, storeid) => {
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: {
+      ack: '1',
+      category: 'Backend_error',
+      message: errorMsg,
+      data: {
+        guid,
+        store_id: storeid,
+        items: []
+      }
+    }
+  };
+};
